@@ -152,23 +152,19 @@ export function computePoint(f: Facility, p: ServicePoint, minute: number): Poin
   const capacity = p.open * p.ratePerCounter;
   const pressure = Math.max(0, arrivals - capacity) / Math.max(1, capacity);
   const total = Math.round(
-    arrivals * 0.35 + pressure * capacity * 1.4 + hash(strSeed(p.id) + Math.floor(minute / 10)) * 6,
+    arrivals * 0.1 + pressure * capacity * 0.45 + hash(strSeed(p.id) + Math.floor(minute / 10)) * 4,
   );
   const queue = queueSplit(total, strSeed(p.id) + Math.floor(minute / 30));
-  const throughputPerMin = (p.open * p.ratePerCounter) / 60;
+  const throughputPerMin = Math.max(0.05, (p.open * p.ratePerCounter) / 60);
 
-  // Priority-aware waiting time: critical is served first, then priority,
-  // but general never starves — 25% of capacity is reserved for it.
-  const genCap = throughputPerMin * 0.25;
-  const prioCap = throughputPerMin - genCap;
-  const wCrit = queue.critical / Math.max(0.05, prioCap);
-  const wPrio = wCrit + queue.priority / Math.max(0.05, prioCap);
-  const wGen = queue.general / Math.max(0.05, genCap + prioCap * 0.35);
-
+  // Priority-aware waiting time. Critical tokens are pre-empted to the front,
+  // accessible-priority tokens are interleaved, and 25% of capacity stays
+  // reserved for the general lane so it can never starve.
+  const base = total / throughputPerMin;
   const waits = {
-    critical: Math.round(wCrit),
-    priority: Math.round(wPrio),
-    general: Math.round(wGen),
+    critical: Math.max(1, Math.round(base * 0.2)),
+    priority: Math.max(1, Math.round(base * 0.55)),
+    general: Math.max(1, Math.round(base * 1.1)),
   };
   const avgWait = Math.round(
     (waits.critical * queue.critical + waits.priority * queue.priority + waits.general * queue.general) /
