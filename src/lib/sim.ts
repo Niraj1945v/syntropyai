@@ -230,7 +230,7 @@ export function snapshot(f: Facility, minute: number): Snapshot {
   const spread = Math.max(...points.map((p) => p.avgWait)) - Math.min(...points.map((p) => p.avgWait));
   const fairness = Math.max(
     0,
-    Math.min(100, Math.round(100 - Math.max(0, equityGap) * 3 - spread * 1.2)),
+    Math.min(100, Math.round(100 - Math.max(0, equityGap) * 4 - spread * 0.6)),
   );
 
   const reasons: string[] = [];
