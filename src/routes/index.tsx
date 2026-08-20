@@ -192,7 +192,13 @@ function Dashboard() {
                       style={{
                         width: `${Math.min(100, z.ratio * 100)}%`,
                         backgroundColor: `var(--color-${
-                          z.level === "critical" ? "danger" : z.level === "crowded" ? "warn" : "ok"
+                          z.level === "critical"
+                            ? "danger"
+                            : z.level === "crowded"
+                              ? "danger"
+                              : z.level === "busy"
+                                ? "warn"
+                                : "ok"
                         })`,
                       }}
                     />
