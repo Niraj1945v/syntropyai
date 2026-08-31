@@ -8,15 +8,20 @@ export function Shell({ children, signedIn = false }: { children: ReactNode; sig
   const router = useRouter();
   const signOut = useServerFn(staffSignOut);
   const tabs = [
-    { to: "/", label: "Control room" },
-    { to: "/token", label: "Visitor token" },
-    { to: "/about", label: "How it works" },
+    { to: "/", label: "Control Room" },
+    { to: "/counter", label: "Counter Terminal" },
+    { to: "/display", label: "Public Display" },
+    { to: "/token", label: "Visitor Token" },
+    { to: "/about", label: "Architecture" },
   ];
 
   async function handleSignOut() {
-    await signOut({});
-    await router.invalidate();
-    await router.navigate({ to: "/staff-login", replace: true });
+    try {
+      await signOut({});
+      await router.invalidate();
+    } finally {
+      window.location.href = "/staff-login";
+    }
   }
 
   return (

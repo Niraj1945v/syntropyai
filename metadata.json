@@ -1,0 +1,6 @@
+{
+  "name": "QueueSense.ai",
+  "description": "Privacy-conscious AI platform that forecasts demand, estimates waiting time and allocates counters fairly in high-footfall public facilities.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

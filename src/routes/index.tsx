@@ -1,534 +1,705 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useServerFn } from "@tanstack/react-start";
+import { useState, useEffect } from "react";
 import { requireStaff } from "@/lib/gate.functions";
-import { useSimClock } from "@/hooks/useSimClock";
 import {
-  FACILITIES,
-  fmtTime,
-  forecast,
-  snapshot,
-  type Facility,
-  type PointState,
-  type Snapshot,
-} from "@/lib/sim";
+  getLiveQueue,
+  updateCounterServer,
+  broadcastNoticeServer,
+  bumpPriorityServer,
+  transferTokenServer,
+  cancelTokenServer,
+  issueTokenServer,
+} from "@/lib/queue.functions";
+import { LIVE_FACILITIES } from "@/lib/queue-store";
+import type { LiveFacilityState, Priority, LiveDesk, LiveToken } from "@/lib/types";
 
 export const Route = createFileRoute("/")({
+  beforeLoad: async () => {
+    await requireStaff();
+  },
   head: () => ({
     meta: [
-      { title: "QueueSense.ai — AI Queue & Crowd Optimization Control Room" },
+      { title: "Live Operations Control Room — QueueSense.ai" },
       {
         name: "description",
         content:
-          "Forecast demand, estimate waiting time and allocate counters fairly across hospitals, campuses and public service centres — with anonymous sensing and transparent escalation.",
-      },
-      { property: "og:title", content: "QueueSense.ai — Queue & Crowd Control Room" },
-      {
-        property: "og:description",
-        content:
-          "Live demand forecasts, fairness-aware counter allocation and transparent escalation for high-footfall public facilities.",
+          "Real-time queue monitoring, dynamic counter rebalancing, priority equity tracking, and emergency surge escalation.",
       },
     ],
   }),
-  loader: () => requireStaff(),
-  component: Dashboard,
+  component: ControlRoomDashboard,
 });
 
-function Dashboard() {
-  const [facilityId, setFacilityId] = useState(FACILITIES[0]!.id);
-  const [overrides, setOverrides] = useState<Record<string, number>>({});
-  const [sensing, setSensing] = useState<"token" | "anonymous">("token");
-  const [log, setLog] = useState<{ time: string; text: string }[]>([]);
-  const [speed, setSpeed] = useState(2);
-  const clock = useSimClock(speed);
+function ControlRoomDashboard() {
+  const [facilityId, setFacilityId] = useState("hospital");
+  const [facilityState, setFacilityState] = useState<LiveFacilityState | null>(null);
+  const [selectedDeskId, setSelectedDeskId] = useState<string>("all");
+  const [selectedPriority, setSelectedPriority] = useState<string>("all");
+  const [broadcastText, setBroadcastText] = useState("");
+  const [broadcastLevel, setBroadcastLevel] = useState<"info" | "warning" | "critical">("info");
+  const [busy, setBusy] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [quickIssueDesk, setQuickIssueDesk] = useState("");
+  const [quickIssuePriority, setQuickIssuePriority] = useState<Priority>("general");
 
-  const base = FACILITIES.find((f) => f.id === facilityId)!;
-  const facility: Facility = useMemo(
-    () => ({
-      ...base,
-      points: base.points.map((p) => ({ ...p, open: overrides[`${base.id}:${p.id}`] ?? p.open })),
-    }),
-    [base, overrides],
-  );
+  const fetchState = useServerFn(getLiveQueue);
+  const updateCounterFn = useServerFn(updateCounterServer);
+  const broadcastFn = useServerFn(broadcastNoticeServer);
+  const bumpPriorityFn = useServerFn(bumpPriorityServer);
+  const transferFn = useServerFn(transferTokenServer);
+  const cancelFn = useServerFn(cancelTokenServer);
+  const issueFn = useServerFn(issueTokenServer);
 
-  const snap = useMemo(() => snapshot(facility, clock.minute), [facility, clock.minute]);
-  const fc = useMemo(() => forecast(facility, clock.minute), [facility, clock.minute]);
-
-  function applyAll() {
-    const next = { ...overrides };
-    const changes: string[] = [];
-    for (const p of snap.points) {
-      if (p.recommendedCounters !== p.point.open) {
-        next[`${facility.id}:${p.point.id}`] = p.recommendedCounters;
-        changes.push(`${p.point.name} ${p.point.open}→${p.recommendedCounters}`);
+  async function refresh(targetFacility = facilityId) {
+    try {
+      const state = await fetchState({ data: { facilityId: targetFacility } });
+      setFacilityState(state);
+      if (!quickIssueDesk && state.facility.desks.length > 0) {
+        setQuickIssueDesk(state.facility.desks[0]!.id);
       }
+    } catch (err) {
+      console.error("Control room state fetch failed:", err);
     }
-    setOverrides(next);
-    if (changes.length)
-      setLog((l) =>
-        [
-          { time: fmtTime(clock.minute), text: `Supervisor approved reallocation: ${changes.join(", ")}` },
-          ...l,
-        ].slice(0, 8),
-      );
   }
 
-  function broadcast() {
-    setLog((l) =>
-      [
-        {
-          time: fmtTime(clock.minute),
-          text: "Multilingual delay notice broadcast to all waiting tokens (EN/HI/MR/TA/BN)",
-        },
-        ...l,
-      ].slice(0, 8),
-    );
+  useEffect(() => {
+    refresh();
+    const iv = setInterval(() => refresh(), 3000);
+    return () => clearInterval(iv);
+  }, [facilityId]);
+
+  const activeFacility =
+    LIVE_FACILITIES.find((f) => f.id === facilityId) ?? LIVE_FACILITIES[0]!;
+
+  // Counter management
+  async function adjustCountersForDesk(desk: LiveDesk, delta: number) {
+    if (!facilityState) return;
+    setBusy(true);
+    try {
+      const deskCounters = facilityState.counters.filter((c) => c.pointId === desk.id);
+      if (delta > 0) {
+        // Open a closed/paused counter or add an active one
+        const inactive = deskCounters.find((c) => c.status !== "open");
+        if (inactive) {
+          await updateCounterFn({
+            data: { facilityId, counterId: inactive.id, status: "open" },
+          });
+        }
+      } else {
+        // Close an open counter
+        const active = deskCounters.find((c) => c.status === "open" && !c.currentServingTokenId);
+        if (active) {
+          await updateCounterFn({
+            data: { facilityId, counterId: active.id, status: "closed" },
+          });
+        }
+      }
+      await refresh();
+    } finally {
+      setBusy(false);
+    }
   }
+
+  // Token actions
+  async function handleBumpPriority(tok: LiveToken, newPrio: Priority) {
+    setBusy(true);
+    try {
+      await bumpPriorityFn({
+        data: { facilityId, tokenId: tok.id, priority: newPrio },
+      });
+      await refresh();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleCancelToken(tok: LiveToken) {
+    if (!confirm(`Cancel Token ${tok.tokenNumber}?`)) return;
+    setBusy(true);
+    try {
+      await cancelFn({ data: { facilityId, tokenId: tok.id } });
+      await refresh();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleQuickIssue() {
+    if (!quickIssueDesk) return;
+    setBusy(true);
+    try {
+      await issueFn({
+        data: {
+          facilityId,
+          pointId: quickIssueDesk,
+          priority: quickIssuePriority,
+        },
+      });
+      await refresh();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleBroadcast() {
+    if (!broadcastText.trim()) return;
+    setBusy(true);
+    try {
+      await broadcastFn({
+        data: {
+          facilityId,
+          text: broadcastText.trim(),
+          level: broadcastLevel,
+        },
+      });
+      setBroadcastText("");
+      await refresh();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Export handlers
+  function exportCSV() {
+    if (!facilityState) return;
+    const headers = [
+      "TokenNumber",
+      "ServiceDesk",
+      "Priority",
+      "Status",
+      "WaitEstimatedMin",
+      "CreatedAt",
+      "CounterAssigned",
+      "Operator",
+    ];
+    const rows = facilityState.tokens.map((t) => [
+      t.tokenNumber,
+      `"${t.pointName}"`,
+      t.priority,
+      t.status,
+      t.estimatedWaitMinutes,
+      new Date(t.createdAt).toISOString(),
+      t.counterName || "Unassigned",
+      t.operatorName || "N/A",
+    ]);
+    const csvContent =
+      "data:text/csv;charset=utf-8," + [headers.join(","), ...rows.map((e) => e.join(","))].join("\n");
+    const link = document.createElement("a");
+    link.setAttribute("href", encodeURI(csvContent));
+    link.setAttribute("download", `QueueSense_${facilityId}_Shift_Audit.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }
+
+  function exportJSON() {
+    if (!facilityState) return;
+    const blob = new Blob([JSON.stringify(facilityState, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `QueueSense_${facilityId}_State.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  const metrics = facilityState?.metrics;
+  const filteredTokens = (facilityState?.tokens ?? []).filter((tok) => {
+    if (selectedDeskId !== "all" && tok.pointId !== selectedDeskId) return false;
+    if (selectedPriority !== "all" && tok.priority !== selectedPriority) return false;
+    if (searchQuery && !tok.tokenNumber.toLowerCase().includes(searchQuery.toLowerCase())) {
+      return false;
+    }
+    return true;
+  });
 
   return (
-    <div className="space-y-5">
-      <Header
-        facility={facility}
-        facilityId={facilityId}
-        setFacilityId={(v) => setFacilityId(v)}
-        minute={clock.minute}
-        running={clock.running}
-        toggle={() => clock.setRunning(!clock.running)}
-        speed={speed}
-        setSpeed={setSpeed}
-        sensing={sensing}
-        setSensing={setSensing}
-        snap={snap}
-      />
+    <div className="space-y-6">
+      {/* Top Banner & Facility Selector */}
+      <div className="hero-surface p-5">
+        <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="chip">
+                <span className="pulse-dot" /> Live Operations Room
+              </span>
+              <span className="chip font-mono text-[11px]">Real-Time Active System</span>
+            </div>
+            <h1 className="mt-2 text-2xl font-bold tracking-tight sm:text-3xl">
+              {activeFacility.name}
+            </h1>
+            <p className="text-xs text-muted-foreground">
+              {activeFacility.kind} · Real-time queue telemetry, dynamic desk allocation, SLA
+              compliance, and public display sync.
+            </p>
+          </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label={`${facility.visitorWord} waiting`} value={String(snap.totalWaiting)} hint="live across all desks" />
-        <Stat
-          label="Average wait"
-          value={`${snap.avgWait}m`}
-          hint={snap.avgWait > 20 ? "above target" : "within target"}
-          tone={snap.avgWait > 20 ? "warn" : "ok"}
-        />
-        <Stat
-          label="Fairness score"
-          value={`${snap.fairness}`}
-          hint="equity + spread weighted"
-          tone={snap.fairness > 75 ? "ok" : snap.fairness > 50 ? "warn" : "danger"}
-        />
-        <Stat
-          label="Equity gap"
-          value={`${snap.equityGap > 0 ? "+" : ""}${snap.equityGap}m`}
-          hint="priority vs general wait"
-          tone={snap.equityGap > 3 ? "danger" : "ok"}
-        />
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={facilityId}
+              onChange={(e) => setFacilityId(e.target.value)}
+              className="rounded-lg border border-border bg-surface-2 px-3 py-2 text-xs font-bold text-foreground"
+            >
+              {LIVE_FACILITIES.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.name}
+                </option>
+              ))}
+            </select>
+
+            <a
+              href="/counter"
+              target="_blank"
+              rel="noreferrer"
+              className="btn btn-secondary text-xs px-3 py-2"
+            >
+              ↗ Open Counter Terminal
+            </a>
+            <a
+              href="/display"
+              target="_blank"
+              rel="noreferrer"
+              className="btn btn-primary text-xs px-3 py-2 font-bold"
+            >
+              ↗ Open Public TV Display
+            </a>
+          </div>
+        </div>
       </div>
 
-      <section className="panel p-5">
-        <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <h2 className="font-display text-base font-bold">Demand forecast — next 3 hours</h2>
-          <span className="text-xs text-muted-foreground">
-            15-minute buckets · shaded band = model uncertainty
+      {/* Primary Telemetry Metrics Cards */}
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-4 lg:grid-cols-6">
+        <div className="card-signal p-4">
+          <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+            Waiting in Queue
+          </span>
+          <div className="mt-1 font-mono text-3xl font-black text-foreground">
+            {metrics?.totalWaiting ?? 0}
+          </div>
+          <span className="text-[10px] text-muted-foreground">Across all desks</span>
+        </div>
+
+        <div className="card-signal p-4">
+          <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+            Now Serving
+          </span>
+          <div className="mt-1 font-mono text-3xl font-black text-primary">
+            {metrics?.totalServing ?? 0}
+          </div>
+          <span className="text-[10px] text-muted-foreground">
+            {metrics?.openCountersCount ?? 0} Counters Open
           </span>
         </div>
-        <ForecastChart data={fc} now={clock.minute} />
-      </section>
 
-      <div className="grid gap-4 lg:grid-cols-[1.6fr_1fr]">
-        <section className="panel p-5">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 className="font-display text-base font-bold">
-              {facility.pointWord} — allocation recommendations
-            </h2>
-            <button className="btn btn-primary" onClick={applyAll}>
-              Apply all recommendations
+        <div className="card-signal p-4">
+          <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+            SLA Adherence
+          </span>
+          <div
+            className="mt-1 font-mono text-3xl font-black"
+            style={{
+              color: (metrics?.slaAdherencePercent ?? 100) >= 85 ? "var(--color-ok)" : "var(--color-warn)",
+            }}
+          >
+            {metrics?.slaAdherencePercent ?? 100}%
+          </div>
+          <span className="text-[10px] text-muted-foreground">Target &gt; 85%</span>
+        </div>
+
+        <div className="card-signal p-4">
+          <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+            Avg Wait Time
+          </span>
+          <div className="mt-1 font-mono text-3xl font-black text-foreground">
+            {metrics?.avgWaitMinutes ?? 0}m
+          </div>
+          <span className="text-[10px] text-muted-foreground">Live rolling avg</span>
+        </div>
+
+        <div className="card-signal p-4">
+          <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+            Fairness Index
+          </span>
+          <div className="mt-1 font-mono text-3xl font-black text-foreground">
+            {metrics?.fairnessScore ?? 100}
+            <span className="text-sm font-normal text-muted-foreground">/100</span>
+          </div>
+          <span className="text-[10px] text-muted-foreground">Equity Gap: {metrics?.equityGapMinutes ?? 0}m</span>
+        </div>
+
+        <div className="card-signal p-4">
+          <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+            Shift Completed
+          </span>
+          <div className="mt-1 font-mono text-3xl font-black text-foreground">
+            {metrics?.totalCompleted ?? 0}
+          </div>
+          <span className="text-[10px] text-muted-foreground">
+            {metrics?.totalNoShow ?? 0} No-Shows
+          </span>
+        </div>
+      </div>
+
+      {/* Middle Section: Desk Staffing & Real Counter Allocation */}
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-bold text-foreground">Live Service Desks & Staff Counters</h2>
+            <p className="text-xs text-muted-foreground">
+              Adjust open counters in real-time to match live demand and maintain SLA compliance.
+            </p>
+          </div>
+
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={exportCSV}
+              className="btn border border-border bg-surface px-3 py-1.5 text-xs font-semibold text-foreground hover:border-primary"
+            >
+              📥 Export CSV Audit
+            </button>
+            <button
+              type="button"
+              onClick={exportJSON}
+              className="btn border border-border bg-surface px-3 py-1.5 text-xs font-semibold text-foreground hover:border-primary"
+            >
+              📥 Export JSON State
             </button>
           </div>
-          <div className="mt-4 space-y-3">
-            {snap.points.map((p) => (
-              <PointRow
-                key={p.point.id}
-                p={p}
-                onApply={() => {
-                  setOverrides((o) => ({
-                    ...o,
-                    [`${facility.id}:${p.point.id}`]: p.recommendedCounters,
-                  }));
-                  setLog((l) =>
-                    [
-                      {
-                        time: fmtTime(clock.minute),
-                        text: `${p.point.name}: counters set to ${p.recommendedCounters} (was ${p.point.open})`,
-                      },
-                      ...l,
-                    ].slice(0, 8),
-                  );
-                }}
-              />
-            ))}
-          </div>
-        </section>
+        </div>
 
-        <div className="space-y-4">
-          <section className="panel p-5">
-            <h2 className="font-display text-base font-bold">Crowd density by zone</h2>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {sensing === "token"
-                ? "Derived from token check-ins"
-                : "Anonymous headcount sensors — aggregate integers only"}
-            </p>
-            <div className="mt-4 space-y-3">
-              {snap.zones.map((z) => (
-                <div key={z.zone.id}>
-                  <div className="flex items-center justify-between text-sm">
-                    <span>{z.zone.name}</span>
-                    <span className="font-display font-bold">
-                      {z.occupancy}
-                      <span className="text-xs font-normal text-muted-foreground">
-                        {" "}
-                        / {z.zone.capacity}
-                      </span>
+        {/* Desks Grid */}
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+          {activeFacility.desks.map((desk) => {
+            const deskCounters =
+              facilityState?.counters.filter((c) => c.pointId === desk.id) ?? [];
+            const openCount = deskCounters.filter((c) => c.status === "open").length;
+            const waitingCount =
+              facilityState?.tokens.filter(
+                (t) => t.status === "waiting" && t.pointId === desk.id,
+              ).length ?? 0;
+            const isBottleneck = waitingCount > openCount * 4;
+
+            return (
+              <div
+                key={desk.id}
+                className={`rounded-xl border p-4 transition-all ${
+                  isBottleneck
+                    ? "border-amber-500/60 bg-amber-500/10"
+                    : "border-border bg-surface-2/60"
+                }`}
+              >
+                <div className="flex items-start justify-between">
+                  <div>
+                    <h3 className="text-sm font-bold text-foreground">{desk.name}</h3>
+                    <span className="text-[11px] text-muted-foreground">
+                      SLA: <strong className="text-primary">{desk.slaMinutes}m</strong> · Target:{" "}
+                      {desk.ratePerHour}/hr
                     </span>
                   </div>
-                  <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-surface-2">
-                    <div
-                      className="h-full rounded-full transition-all duration-500"
-                      style={{
-                        width: `${Math.min(100, z.ratio * 100)}%`,
-                        backgroundColor: `var(--color-${
-                          z.level === "critical"
-                            ? "danger"
-                            : z.level === "crowded"
-                              ? "danger"
-                              : z.level === "busy"
-                                ? "warn"
-                                : "ok"
-                        })`,
-                      }}
-                    />
+                  {isBottleneck && (
+                    <span className="rounded bg-amber-500 px-1.5 py-0.5 text-[10px] font-black uppercase text-black">
+                      Surge Alert
+                    </span>
+                  )}
+                </div>
+
+                <div className="mt-4 grid grid-cols-2 gap-2 border-y border-border/40 py-2 text-center">
+                  <div>
+                    <span className="text-[10px] uppercase text-muted-foreground">Waiting</span>
+                    <div className="font-mono text-xl font-bold text-foreground">{waitingCount}</div>
                   </div>
+                  <div>
+                    <span className="text-[10px] uppercase text-muted-foreground">Active Desks</span>
+                    <div className="font-mono text-xl font-bold text-primary">{openCount}</div>
+                  </div>
+                </div>
+
+                {/* Counter Stepper */}
+                <div className="mt-3 flex items-center justify-between">
+                  <span className="text-xs text-muted-foreground font-medium">
+                    Staff Allocation:
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      disabled={busy || openCount <= 1}
+                      onClick={() => adjustCountersForDesk(desk, -1)}
+                      className="grid h-7 w-7 place-items-center rounded bg-surface border border-border text-sm font-bold hover:border-primary disabled:opacity-40"
+                    >
+                      −
+                    </button>
+                    <span className="font-mono text-sm font-bold px-2">{openCount}</span>
+                    <button
+                      type="button"
+                      disabled={busy || openCount >= desk.maxCounters}
+                      onClick={() => adjustCountersForDesk(desk, 1)}
+                      className="grid h-7 w-7 place-items-center rounded bg-primary text-primary-foreground text-sm font-bold hover:opacity-90 disabled:opacity-40"
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Main Dual Grid: Live Queue Management (Left) & Controls/Broadcast (Right) */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        {/* Left 2 Cols: Live Queue Inspection & Actions */}
+        <div className="space-y-4 lg:col-span-2">
+          <div className="rounded-xl border border-border bg-surface p-5 shadow-lg">
+            <div className="flex flex-col justify-between gap-3 border-b border-border/60 pb-4 sm:flex-row sm:items-center">
+              <div>
+                <h2 className="text-base font-bold text-foreground">Live Queue Manager</h2>
+                <p className="text-xs text-muted-foreground">
+                  View and manage real visitor tokens across all lanes.
+                </p>
+              </div>
+
+              {/* Filters */}
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  type="text"
+                  placeholder="Search token..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="rounded-md border border-border bg-surface-2 px-2.5 py-1 text-xs text-foreground placeholder:text-muted-foreground outline-none"
+                />
+
+                <select
+                  value={selectedDeskId}
+                  onChange={(e) => setSelectedDeskId(e.target.value)}
+                  className="rounded-md border border-border bg-surface-2 px-2 py-1 text-xs text-foreground"
+                >
+                  <option value="all">All Desks</option>
+                  {activeFacility.desks.map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.name}
+                    </option>
+                  ))}
+                </select>
+
+                <select
+                  value={selectedPriority}
+                  onChange={(e) => setSelectedPriority(e.target.value)}
+                  className="rounded-md border border-border bg-surface-2 px-2 py-1 text-xs text-foreground"
+                >
+                  <option value="all">All Priorities</option>
+                  <option value="critical">Critical</option>
+                  <option value="priority">Priority</option>
+                  <option value="general">General</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Tokens Table */}
+            <div className="mt-4 max-h-[460px] overflow-y-auto">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="border-b border-border text-muted-foreground">
+                    <th className="pb-2 font-semibold">Token</th>
+                    <th className="pb-2 font-semibold">Desk</th>
+                    <th className="pb-2 font-semibold">Priority</th>
+                    <th className="pb-2 font-semibold">Status</th>
+                    <th className="pb-2 font-semibold">Wait Time</th>
+                    <th className="pb-2 text-right font-semibold">Supervisor Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border/40">
+                  {filteredTokens.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="py-8 text-center text-muted-foreground">
+                        No matching tokens found in queue.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredTokens.map((tok) => (
+                      <tr key={tok.id} className="hover:bg-surface-2/40">
+                        <td className="py-2.5 font-mono font-bold text-foreground">
+                          {tok.tokenNumber}
+                        </td>
+                        <td className="py-2.5 text-foreground max-w-[140px] truncate">
+                          {tok.pointName}
+                        </td>
+                        <td className="py-2.5">
+                          <span
+                            className={`rounded px-1.5 py-0.5 text-[10px] font-extrabold uppercase ${
+                              tok.priority === "critical"
+                                ? "bg-rose-500/20 text-rose-400 border border-rose-500/40"
+                                : tok.priority === "priority"
+                                  ? "bg-amber-500/20 text-amber-400 border border-amber-500/40"
+                                  : "bg-surface-2 text-muted-foreground"
+                            }`}
+                          >
+                            {tok.priority}
+                          </span>
+                        </td>
+                        <td className="py-2.5">
+                          <span
+                            className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${
+                              tok.status === "serving" || tok.status === "called"
+                                ? "bg-emerald-500/20 text-emerald-400"
+                                : tok.status === "completed"
+                                  ? "bg-blue-500/20 text-blue-400"
+                                  : "bg-surface text-muted-foreground"
+                            }`}
+                          >
+                            {tok.status}
+                          </span>
+                        </td>
+                        <td className="py-2.5 font-mono text-muted-foreground">
+                          {tok.status === "waiting" ? `~${tok.estimatedWaitMinutes}m` : "—"}
+                        </td>
+                        <td className="py-2.5 text-right">
+                          <div className="flex items-center justify-end gap-1.5">
+                            {tok.status === "waiting" && tok.priority !== "critical" && (
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() => handleBumpPriority(tok, "critical")}
+                                className="rounded bg-rose-500/10 border border-rose-500/30 px-2 py-0.5 text-[10px] font-bold text-rose-400 hover:bg-rose-500/20"
+                                title="Fast-track to Critical Priority"
+                              >
+                                ⚡ Urgent
+                              </button>
+                            )}
+
+                            {tok.status === "waiting" && (
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() => handleCancelToken(tok)}
+                                className="rounded bg-surface-2 px-2 py-0.5 text-[10px] text-muted-foreground hover:text-rose-400"
+                                title="Cancel Token"
+                              >
+                                ✕ Cancel
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        {/* Right Col: Quick Dispense, Public Broadcast, & Decision Audit Log */}
+        <div className="space-y-4">
+          {/* Quick Dispense at Desk */}
+          <div className="rounded-xl border border-border bg-surface p-5 shadow-lg">
+            <h3 className="text-sm font-bold text-foreground">Issue Token at Desk</h3>
+            <p className="text-xs text-muted-foreground">Generate token on behalf of a walk-in visitor.</p>
+
+            <div className="mt-3 space-y-2.5">
+              <select
+                value={quickIssueDesk}
+                onChange={(e) => setQuickIssueDesk(e.target.value)}
+                className="w-full rounded border border-border bg-surface-2 px-2.5 py-1.5 text-xs text-foreground"
+              >
+                {activeFacility.desks.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.name}
+                  </option>
+                ))}
+              </select>
+
+              <div className="flex gap-1.5">
+                {(["general", "priority", "critical"] as Priority[]).map((p) => (
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={() => setQuickIssuePriority(p)}
+                    className={`flex-1 rounded py-1 text-[11px] font-bold uppercase transition-all ${
+                      quickIssuePriority === p
+                        ? "bg-primary text-primary-foreground shadow"
+                        : "bg-surface-2 text-muted-foreground"
+                    }`}
+                  >
+                    {p}
+                  </button>
+                ))}
+              </div>
+
+              <button
+                type="button"
+                disabled={busy}
+                onClick={handleQuickIssue}
+                className="btn btn-primary w-full py-2 text-xs font-bold"
+              >
+                + Dispense Walk-In Token
+              </button>
+            </div>
+          </div>
+
+          {/* Multilingual Public Broadcast Bar */}
+          <div className="rounded-xl border border-border bg-surface p-5 shadow-lg">
+            <h3 className="text-sm font-bold text-foreground">Public Screen Announcement</h3>
+            <p className="text-xs text-muted-foreground">
+              Broadcast a live banner alert to all visitor phones and waiting displays.
+            </p>
+
+            <div className="mt-3 space-y-2.5">
+              <textarea
+                rows={2}
+                value={broadcastText}
+                onChange={(e) => setBroadcastText(e.target.value)}
+                placeholder="Type public notice (e.g. Please have original ID cards ready for Document Verification)..."
+                className="w-full rounded border border-border bg-surface-2 p-2 text-xs text-foreground placeholder:text-muted-foreground outline-none focus:border-primary"
+              />
+
+              <div className="flex items-center justify-between gap-2">
+                <select
+                  value={broadcastLevel}
+                  onChange={(e) =>
+                    setBroadcastLevel(e.target.value as "info" | "warning" | "critical")
+                  }
+                  className="rounded border border-border bg-surface-2 px-2 py-1 text-[11px] text-foreground"
+                >
+                  <option value="info">Info Notice</option>
+                  <option value="warning">Warning Alert</option>
+                  <option value="critical">Critical Surge</option>
+                </select>
+
+                <button
+                  type="button"
+                  disabled={busy || !broadcastText.trim()}
+                  onClick={handleBroadcast}
+                  className="btn btn-primary px-3 py-1 text-xs font-bold"
+                >
+                  📣 Send Broadcast
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Supervisor Decision & Audit Feed */}
+          <div className="rounded-xl border border-border bg-surface p-5 shadow-lg">
+            <h3 className="text-sm font-bold text-foreground">Shift Audit Log</h3>
+            <div className="mt-3 max-h-[220px] space-y-2 overflow-y-auto pr-1">
+              {facilityState?.decisionLog.slice(0, 8).map((log) => (
+                <div
+                  key={log.id}
+                  className="rounded-lg border border-border/50 bg-surface-2/40 p-2 text-xs"
+                >
+                  <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                    <span className="font-mono font-bold text-primary">{log.time}</span>
+                    <span className="uppercase">{log.type.replace("_", " ")}</span>
+                  </div>
+                  <p className="mt-1 text-foreground">{log.text}</p>
                 </div>
               ))}
             </div>
-          </section>
-
-          <Escalation snap={snap} onBroadcast={broadcast} />
+          </div>
         </div>
-      </div>
-
-      <section className="panel p-5">
-        <h2 className="font-display text-base font-bold">Decision audit log</h2>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Every automated recommendation needs human approval and is recorded here.
-        </p>
-        <ul className="mt-3 space-y-2 text-sm">
-          {log.length === 0 && (
-            <li className="text-muted-foreground">No interventions yet in this session.</li>
-          )}
-          {log.map((e, i) => (
-            <li key={i} className="flex gap-3 rounded-lg bg-surface-2 px-3 py-2">
-              <span className="font-display text-xs font-bold text-primary">{e.time}</span>
-              <span className="text-muted-foreground">{e.text}</span>
-            </li>
-          ))}
-        </ul>
-      </section>
-    </div>
-  );
-}
-
-function Header(props: {
-  facility: Facility;
-  facilityId: string;
-  setFacilityId: (v: string) => void;
-  minute: number;
-  running: boolean;
-  toggle: () => void;
-  speed: number;
-  setSpeed: (n: number) => void;
-  sensing: "token" | "anonymous";
-  setSensing: (v: "token" | "anonymous") => void;
-  snap: Snapshot;
-}) {
-  const lvl = props.snap.escalation.level;
-  const tone = lvl === "surge" ? "danger" : lvl === "watch" ? "warn" : "ok";
-  return (
-    <section className="hero-surface p-5 sm:p-6">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="chip">
-          <span className="pulse-dot" /> Live simulation
-        </span>
-        <span
-          className="chip"
-          style={{ color: `var(--color-${tone})`, borderColor: `var(--color-${tone})` }}
-        >
-          {lvl === "surge" ? "Surge protocol" : lvl === "watch" ? "Watch" : "Normal operations"}
-        </span>
-        <span className="chip">{props.facility.kind}</span>
-      </div>
-      <h1 className="mt-3 text-2xl font-bold sm:text-3xl">
-        AI queue, crowd &amp; service experience optimizer
-      </h1>
-      <p className="mt-1 text-sm text-muted-foreground">
-        {props.facility.name} · facility clock{" "}
-        <span className="font-display font-bold text-foreground">{fmtTime(props.minute)}</span>
-      </p>
-
-      <div className="mt-4 flex flex-wrap items-center gap-2">
-        <select
-          value={props.facilityId}
-          onChange={(e) => props.setFacilityId(e.target.value)}
-          className="btn"
-          aria-label="Select facility"
-        >
-          {FACILITIES.map((f) => (
-            <option key={f.id} value={f.id} className="bg-surface">
-              {f.name}
-            </option>
-          ))}
-        </select>
-        <button className="btn" onClick={props.toggle}>
-          {props.running ? "Pause clock" : "Resume clock"}
-        </button>
-        <button className="btn" onClick={() => props.setSpeed(props.speed === 2 ? 10 : 2)}>
-          Speed ×{props.speed}
-        </button>
-        <div className="flex rounded-md border border-border p-0.5 text-xs font-semibold">
-          {(["token", "anonymous"] as const).map((m) => (
-            <button
-              key={m}
-              onClick={() => props.setSensing(m)}
-              className={`rounded px-3 py-1.5 capitalize transition-colors ${
-                props.sensing === m
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground"
-              }`}
-            >
-              {m} sensing
-            </button>
-          ))}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function Stat({
-  label,
-  value,
-  hint,
-  tone = "default",
-}: {
-  label: string;
-  value: string;
-  hint: string;
-  tone?: "default" | "ok" | "warn" | "danger";
-}) {
-  return (
-    <div className="panel p-4">
-      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</p>
-      <p
-        className="stat-value mt-1"
-        style={tone === "default" ? undefined : { color: `var(--color-${tone})` }}
-      >
-        {value}
-      </p>
-      <p className="mt-1 text-xs text-muted-foreground">{hint}</p>
-    </div>
-  );
-}
-
-function PointRow({ p, onApply }: { p: PointState; onApply: () => void }) {
-  const delta = p.recommendedCounters - p.point.open;
-  return (
-    <div className="rounded-xl border border-border bg-surface-2 p-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <p className="font-display text-sm font-bold">{p.point.name}</p>
-          <p className="text-xs text-muted-foreground">
-            {p.total} waiting · {p.point.open} counters open · target {p.point.slaMinutes}m
-          </p>
-        </div>
-        <div className="text-right">
-          <p
-            className="font-display text-xl font-bold"
-            style={{ color: `var(--color-${p.breach ? "danger" : "ok"})` }}
-          >
-            {p.avgWait}m
-          </p>
-          <p className="text-[11px] text-muted-foreground">avg wait</p>
-        </div>
-      </div>
-
-      <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
-        <LaneBox label="Time-critical" n={p.queue.critical} w={p.waits.critical} tone="danger" />
-        <LaneBox label="Priority" n={p.queue.priority} w={p.waits.priority} tone="warn" />
-        <LaneBox label="General" n={p.queue.general} w={p.waits.general} tone="default" />
-      </div>
-
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-        <span className="text-xs text-muted-foreground">
-          Recommendation:{" "}
-          <span className="font-semibold text-foreground">
-            {delta === 0
-              ? "staffing is optimal"
-              : delta > 0
-                ? `open ${delta} more counter${delta > 1 ? "s" : ""}`
-                : `release ${-delta} counter${delta < -1 ? "s" : ""}`}
-          </span>
-        </span>
-        {delta !== 0 && (
-          <button className="btn btn-ghost" onClick={onApply}>
-            Approve
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function LaneBox({
-  label,
-  n,
-  w,
-  tone,
-}: {
-  label: string;
-  n: number;
-  w: number;
-  tone: "danger" | "warn" | "default";
-}) {
-  return (
-    <div className="rounded-lg border border-border px-2 py-2">
-      <p
-        className="font-display text-base font-bold"
-        style={tone === "default" ? undefined : { color: `var(--color-${tone})` }}
-      >
-        {n}
-      </p>
-      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</p>
-      <p className="text-[11px] text-muted-foreground">~{w}m</p>
-    </div>
-  );
-}
-
-function Escalation({ snap, onBroadcast }: { snap: Snapshot; onBroadcast: () => void }) {
-  const lvl = snap.escalation.level;
-  const tone = lvl === "surge" ? "danger" : lvl === "watch" ? "warn" : "ok";
-  return (
-    <section className="panel p-5">
-      <div className="flex items-center justify-between">
-        <h2 className="font-display text-base font-bold">Escalation</h2>
-        <span className="chip" style={{ color: `var(--color-${tone})`, borderColor: `var(--color-${tone})` }}>
-          {lvl}
-        </span>
-      </div>
-      <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        Triggers
-      </p>
-      <ul className="mt-1 space-y-1 text-sm text-muted-foreground">
-        {snap.escalation.reasons.length === 0 && <li>All desks and zones within thresholds.</li>}
-        {snap.escalation.reasons.slice(0, 4).map((r, i) => (
-          <li key={i}>· {r}</li>
-        ))}
-      </ul>
-      <p className="mt-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        Proposed actions
-      </p>
-      <ul className="mt-1 space-y-1 text-sm">
-        {snap.escalation.actions.length === 0 && (
-          <li className="text-muted-foreground">No action required.</li>
-        )}
-        {snap.escalation.actions.slice(0, 4).map((a, i) => (
-          <li key={i}>· {a}</li>
-        ))}
-      </ul>
-      <button className="btn mt-4 w-full" onClick={onBroadcast}>
-        Broadcast multilingual notice
-      </button>
-    </section>
-  );
-}
-
-function ForecastChart({
-  data,
-  now,
-}: {
-  data: { minute: number; predicted: number; lower: number; upper: number; actual?: number }[];
-  now: number;
-}) {
-  const w = 720;
-  const h = 200;
-  const pad = 28;
-  const max = Math.max(...data.map((d) => d.upper)) * 1.1 || 1;
-  const x = (i: number) => pad + (i * (w - pad * 2)) / (data.length - 1);
-  const y = (v: number) => h - pad - (v / max) * (h - pad * 2);
-
-  const band =
-    data.map((d, i) => `${i === 0 ? "M" : "L"}${x(i)},${y(d.upper)}`).join(" ") +
-    " " +
-    data
-      .slice()
-      .reverse()
-      .map((d, i) => `L${x(data.length - 1 - i)},${y(d.lower)}`)
-      .join(" ") +
-    " Z";
-  const line = data.map((d, i) => `${i === 0 ? "M" : "L"}${x(i)},${y(d.predicted)}`).join(" ");
-  const actualPts = data.filter((d) => d.actual !== undefined);
-  const actual = actualPts
-    .map((d, i) => `${i === 0 ? "M" : "L"}${x(data.indexOf(d))},${y(d.actual!)}`)
-    .join(" ");
-  const nowIdx = data.findIndex((d) => d.minute >= now);
-
-  return (
-    <div className="mt-4 overflow-x-auto">
-      <svg viewBox={`0 0 ${w} ${h}`} className="h-52 w-full min-w-[560px]">
-        {[0.25, 0.5, 0.75, 1].map((g) => (
-          <line
-            key={g}
-            x1={pad}
-            x2={w - pad}
-            y1={y(max * g)}
-            y2={y(max * g)}
-            stroke="var(--color-border)"
-            strokeDasharray="3 5"
-          />
-        ))}
-        <path d={band} fill="var(--color-primary)" opacity="0.14" />
-        <path d={line} fill="none" stroke="var(--color-primary)" strokeWidth="2.5" />
-        <path d={actual} fill="none" stroke="var(--color-accent)" strokeWidth="2" />
-        {nowIdx >= 0 && (
-          <line
-            x1={x(nowIdx)}
-            x2={x(nowIdx)}
-            y1={pad / 2}
-            y2={h - pad}
-            stroke="var(--color-foreground)"
-            strokeDasharray="4 4"
-            opacity="0.5"
-          />
-        )}
-        {data.map((d, i) =>
-          i % 4 === 0 ? (
-            <text
-              key={i}
-              x={x(i)}
-              y={h - 8}
-              textAnchor="middle"
-              fontSize="10"
-              fill="var(--color-muted-foreground)"
-            >
-              {fmtTime(d.minute)}
-            </text>
-          ) : null,
-        )}
-      </svg>
-      <div className="mt-2 flex flex-wrap gap-4 text-xs text-muted-foreground">
-        <span>
-          <span className="mr-1 inline-block h-2 w-4 rounded bg-primary align-middle" /> forecast
-        </span>
-        <span>
-          <span className="mr-1 inline-block h-2 w-4 rounded bg-accent align-middle" /> observed
-        </span>
-        <span>· dashed line = now</span>
       </div>
     </div>
   );

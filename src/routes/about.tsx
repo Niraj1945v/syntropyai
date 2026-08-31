@@ -56,9 +56,7 @@ function About() {
     <div className="space-y-6">
       <section className="hero-surface p-6">
         <span className="chip">System design</span>
-        <h1 className="mt-3 text-2xl font-bold sm:text-3xl">
-          How the optimizer thinks
-        </h1>
+        <h1 className="mt-3 text-2xl font-bold sm:text-3xl">How the optimizer thinks</h1>
         <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
           Seven layers, from anonymous sensing to transparent escalation. Everything visible in the
           control room can be explained to the person waiting in the hall.
@@ -77,7 +75,7 @@ function About() {
       <section className="panel p-5">
         <h2 className="font-display text-base font-bold">Objective function</h2>
         <pre className="mt-3 overflow-x-auto rounded-lg bg-surface-2 p-4 text-xs leading-relaxed text-muted-foreground">
-{`minimise   J = w1 · avgWait
+          {`minimise   J = w1 · avgWait
              + w2 · max(0, priorityWait − generalWait)
              + w3 · spread(waitByDesk)
 

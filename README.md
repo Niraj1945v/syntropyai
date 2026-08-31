@@ -1,6 +1,6 @@
 # CrowdFlow Harmony
 
-Al-Based Queue, Crowd and Service Experience Optimization for High-Footfall Public Facilities.   Develop a privacy-conscious platform for hospitals, campuses, government service centres, event venues or large retail facilities that forecasts demand, estimates waiting time and recommends counter, appointment or space allocation. It should support token-based or anonymous sensing, accessible priority rules, multilingual updates and transparent escalation during unusual crowding. The system must optimize both average waiting time and fairness for vulnerable or time-critical users
+Al-Based Queue, Crowd and Service Experience Optimization for High-Footfall Public Facilities. Develop a privacy-conscious platform for hospitals, campuses, government service centres, event venues or large retail facilities that forecasts demand, estimates waiting time and recommends counter, appointment or space allocation. It should support token-based or anonymous sensing, accessible priority rules, multilingual updates and transparent escalation during unusual crowding. The system must optimize both average waiting time and fairness for vulnerable or time-critical users
 
 This project was built with [Lovable](https://lovable.dev).
 
