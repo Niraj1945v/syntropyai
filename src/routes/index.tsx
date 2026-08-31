@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
+import { requireStaff } from "@/lib/gate.functions";
 import { useSimClock } from "@/hooks/useSimClock";
 import {
   FACILITIES,
@@ -28,6 +29,7 @@ export const Route = createFileRoute("/")({
       },
     ],
   }),
+  loader: () => requireStaff(),
   component: Dashboard,
 });
 
