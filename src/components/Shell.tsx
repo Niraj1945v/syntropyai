@@ -1,13 +1,23 @@
-import { Link, useRouterState } from "@tanstack/react-router";
+import { Link, useRouter, useRouterState } from "@tanstack/react-router";
+import { useServerFn } from "@tanstack/react-start";
 import type { ReactNode } from "react";
+import { staffSignOut } from "@/lib/gate.functions";
 
-export function Shell({ children }: { children: ReactNode }) {
+export function Shell({ children, signedIn = false }: { children: ReactNode; signedIn?: boolean }) {
   const path = useRouterState({ select: (s) => s.location.pathname });
+  const router = useRouter();
+  const signOut = useServerFn(staffSignOut);
   const tabs = [
     { to: "/", label: "Control room" },
     { to: "/token", label: "Visitor token" },
     { to: "/about", label: "How it works" },
   ];
+
+  async function handleSignOut() {
+    await signOut({});
+    await router.invalidate();
+    await router.navigate({ to: "/staff-login", replace: true });
+  }
 
   return (
     <div className="min-h-screen">
@@ -42,6 +52,24 @@ export function Shell({ children }: { children: ReactNode }) {
               );
             })}
           </nav>
+          {signedIn ? (
+            <div className="flex items-center gap-2">
+              <span className="chip">Staff session</span>
+              <button
+                onClick={handleSignOut}
+                className="rounded-full border border-border px-3 py-1.5 text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground"
+              >
+                Sign out
+              </button>
+            </div>
+          ) : (
+            <Link
+              to="/staff-login"
+              className="rounded-full border border-border px-3 py-1.5 text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground"
+            >
+              Staff sign in
+            </Link>
+          )}
         </div>
       </header>
       <main className="mx-auto max-w-6xl px-4 py-6">{children}</main>
