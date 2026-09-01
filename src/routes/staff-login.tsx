@@ -6,13 +6,13 @@ import { staffSignIn, passcodeMatches, setStaffUnlockedClient } from "@/lib/gate
 export const Route = createFileRoute("/staff-login")({
   head: () => ({
     meta: [
-      { title: "Staff Sign In — QueueSense.ai Control Room" },
+      { title: "Staff Sign In — SUM Hospital Control Room" },
       {
         name: "description",
         content:
-          "Secure staff sign-in for the QueueSense.ai control room: forecasts, counter allocation and escalation tools for facility supervisors.",
+          "Secure staff sign-in for the SUM Hospital control room: forecasts, counter allocation and escalation tools for facility supervisors.",
       },
-      { property: "og:title", content: "Staff Sign In — QueueSense.ai" },
+      { property: "og:title", content: "Staff Sign In — SUM Hospital" },
       {
         property: "og:description",
         content: "Supervisor access to the queue and crowd optimization control room.",

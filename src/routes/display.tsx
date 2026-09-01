@@ -99,17 +99,19 @@ function PublicDisplayScreen() {
             className="grid h-10 w-10 place-items-center rounded-xl font-display text-lg font-bold text-primary-foreground shadow-md"
             style={{ backgroundImage: "var(--gradient-signal)" }}
           >
-            Q
+            +
           </span>
           <div>
             <div className="flex items-center gap-2">
               <span className="font-display text-lg font-bold tracking-tight text-foreground">
-                {activeFacility.name}
+                SUM Hospital — {activeFacility.name}
               </span>
-              <span className="chip text-[11px] font-bold text-primary">Live Display Board</span>
+              <span className="chip text-[11px] font-bold text-primary border-primary/20 bg-primary/10">
+                Live Display Board
+              </span>
             </div>
-            <p className="text-xs text-muted-foreground">
-              Public Waiting Area Calling Screen · Please proceed when your token appears
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+              Outpatient Waiting Area · Please proceed when your number is called
             </p>
           </div>
         </div>

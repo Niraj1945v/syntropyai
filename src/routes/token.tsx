@@ -15,7 +15,7 @@ import type { LiveFacilityState, LiveToken, Priority } from "@/lib/types";
 export const Route = createFileRoute("/token")({
   head: () => ({
     meta: [
-      { title: "Visitor Token & Live Wait Time — QueueSense.ai" },
+      { title: "Visitor Token & Live Wait Time — SUM Hospital" },
       {
         name: "description",
         content:

@@ -26,20 +26,25 @@ export function Shell({ children, signedIn = false }: { children: ReactNode; sig
 
   return (
     <div className="min-h-screen">
-      <header className="sticky top-0 z-20 border-b border-border bg-background/85 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-3 px-4 py-3">
-          <Link to="/" className="flex items-center gap-2">
+      <header className="sticky top-0 z-20 border-b border-border bg-surface/90 backdrop-blur shadow-sm">
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-4 px-4 py-3">
+          <Link to="/" className="flex items-center gap-3">
             <span
-              className="grid h-8 w-8 place-items-center rounded-lg font-display text-sm font-bold text-primary-foreground"
+              className="grid h-10 w-10 place-items-center rounded-xl font-display text-lg font-bold text-primary-foreground shadow-sm"
               style={{ backgroundImage: "var(--gradient-signal)" }}
             >
-              Q
+              +
             </span>
-            <span className="font-display text-sm font-bold tracking-tight sm:text-base">
-              QueueSense<span className="text-primary">.ai</span>
-            </span>
+            <div className="flex flex-col">
+              <span className="font-display text-lg font-bold tracking-tight leading-none">
+                SUM Hospital
+              </span>
+              <span className="text-xs font-semibold text-primary uppercase tracking-wider">
+                Queue & Capacity
+              </span>
+            </div>
           </Link>
-          <nav className="ml-auto flex gap-1 rounded-full border border-border bg-surface p-1">
+          <nav className="ml-auto flex gap-1 rounded-full bg-background border border-border p-1 shadow-inner">
             {tabs.map((tb) => {
               const active = path === tb.to;
               return (

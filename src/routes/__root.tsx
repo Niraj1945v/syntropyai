@@ -79,13 +79,13 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "QueueSense.ai — AI Queue & Crowd Optimization" },
+      { title: "SUM Hospital — AI Queue & Crowd Optimization" },
       {
         name: "description",
         content:
           "Privacy-conscious AI platform that forecasts demand, estimates waiting time and allocates counters fairly in high-footfall public facilities.",
       },
-      { property: "og:title", content: "QueueSense.ai — AI Queue & Crowd Optimization" },
+      { property: "og:title", content: "SUM Hospital — AI Queue & Crowd Optimization" },
       {
         property: "og:description",
         content:

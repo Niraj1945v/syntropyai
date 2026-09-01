@@ -28,7 +28,7 @@ export const Route = createFileRoute("/")({
   },
   head: () => ({
     meta: [
-      { title: "Live Operations Control Room — QueueSense.ai" },
+      { title: "Live Operations Control Room — SUM Hospital" },
       {
         name: "description",
         content:
@@ -232,7 +232,7 @@ function ControlRoomDashboard() {
       [headers.join(","), ...rows.map((e) => e.join(","))].join("\n");
     const link = document.createElement("a");
     link.setAttribute("href", encodeURI(csvContent));
-    link.setAttribute("download", `QueueSense_${facilityId}_Shift_Audit.csv`);
+    link.setAttribute("download", `SUM Hospital_${facilityId}_Shift_Audit.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -246,7 +246,7 @@ function ControlRoomDashboard() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `QueueSense_${facilityId}_State.json`;
+    link.download = `SUM Hospital_${facilityId}_State.json`;
     link.click();
     URL.revokeObjectURL(url);
   }

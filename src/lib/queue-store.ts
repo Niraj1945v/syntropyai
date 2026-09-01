@@ -14,7 +14,7 @@ import type {
 export const LIVE_FACILITIES: LiveFacility[] = [
   {
     id: "hospital",
-    name: "Apex District General Hospital",
+    name: "SUM Hospital",
     kind: "Healthcare / Emergency",
     visitorWord: "Patients",
     pointWord: "Clinical & Triage Desks",
@@ -179,7 +179,7 @@ export const LIVE_FACILITIES: LiveFacility[] = [
   },
   {
     id: "campus",
-    name: "Apex University Student Central",
+    name: "SUM University Student Central",
     kind: "Higher Education",
     visitorWord: "Students",
     pointWord: "Service Counters",

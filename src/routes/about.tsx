@@ -3,13 +3,13 @@ import { createFileRoute } from "@tanstack/react-router";
 export const Route = createFileRoute("/about")({
   head: () => ({
     meta: [
-      { title: "How QueueSense.ai Works — Forecasting, Fairness & Privacy" },
+      { title: "How SUM Hospital Works — Forecasting, Fairness & Privacy" },
       {
         name: "description",
         content:
-          "The models, priority rules, fairness metrics and privacy-by-design sensing behind the QueueSense.ai queue and crowd optimization platform.",
+          "The models, priority rules, fairness metrics and privacy-by-design sensing behind the SUM Hospital queue and crowd optimization platform.",
       },
-      { property: "og:title", content: "How QueueSense.ai Works" },
+      { property: "og:title", content: "How SUM Hospital Works" },
       {
         property: "og:description",
         content:
