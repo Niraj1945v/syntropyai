@@ -2,7 +2,13 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useEffect, useState } from "react";
 import { LANGS, t, type Lang } from "@/lib/i18n";
-import { LIVE_FACILITIES, playQueueChime } from "@/lib/queue-store";
+import {
+  LIVE_FACILITIES,
+  playQueueChime,
+  getFacilityState,
+  issueLiveToken,
+  cancelLiveToken,
+} from "@/lib/queue-store";
 import { issueTokenServer, getLiveQueue, cancelTokenServer } from "@/lib/queue.functions";
 import type { LiveFacilityState, LiveToken, Priority } from "@/lib/types";
 
@@ -53,10 +59,20 @@ function TokenPage() {
   // Poll state
   async function refresh(targetFacility = facilityId) {
     try {
-      const state = await fetchState({ data: { facilityId: targetFacility } });
+      let state: LiveFacilityState | null = null;
+      try {
+        state = await fetchState({ data: { facilityId: targetFacility } });
+      } catch {
+        // Fallback for static hosting
+      }
+      if (!state || !state.facility) {
+        state = getFacilityState(targetFacility);
+      }
       setFacilityState(state);
     } catch (err) {
       console.error("Token state refresh error:", err);
+      const fallback = getFacilityState(targetFacility);
+      if (fallback) setFacilityState(fallback);
     }
   }
 
@@ -92,13 +108,21 @@ function TokenPage() {
     if (!pointId) return;
     setBusy(true);
     try {
-      const token = await issueFn({
-        data: {
-          facilityId,
-          pointId,
-          priority,
-        },
-      });
+      let token: LiveToken | null = null;
+      try {
+        token = await issueFn({
+          data: {
+            facilityId,
+            pointId,
+            priority,
+          },
+        });
+      } catch {
+        // Fallback for static hosting
+      }
+      if (!token) {
+        token = issueLiveToken(facilityId, pointId, priority);
+      }
       setActiveTokenId(token.id);
       setHasChimedForCall(false);
       try {
@@ -116,7 +140,11 @@ function TokenPage() {
     if (!activeTokenId) return;
     setBusy(true);
     try {
-      await cancelFn({ data: { facilityId, tokenId: activeTokenId } });
+      try {
+        await cancelFn({ data: { facilityId, tokenId: activeTokenId } });
+      } catch {
+        cancelLiveToken(facilityId, activeTokenId);
+      }
       setActiveTokenId(null);
       try {
         localStorage.removeItem("queuesense_active_token_id");

@@ -108,7 +108,13 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { rel: "icon", href: "/favicon.ico", type: "image/x-icon" },
     ],
   }),
-  loader: () => getStaffStatus(),
+  loader: async () => {
+    try {
+      return await getStaffStatus();
+    } catch {
+      return { signedIn: false };
+    }
+  },
   shellComponent: RootShell,
   component: RootComponent,
   notFoundComponent: NotFoundComponent,
@@ -116,6 +122,9 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 });
 
 function RootShell({ children }: { children: ReactNode }) {
+  if (typeof document !== "undefined") {
+    return <>{children}</>;
+  }
   return (
     <html lang="en">
       <head>

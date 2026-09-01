@@ -11,7 +11,15 @@ import {
   cancelTokenServer,
   issueTokenServer,
 } from "@/lib/queue.functions";
-import { LIVE_FACILITIES } from "@/lib/queue-store";
+import {
+  LIVE_FACILITIES,
+  getFacilityState,
+  updateCounter,
+  broadcastPublicNotice,
+  bumpTokenPriority,
+  cancelLiveToken,
+  issueLiveToken,
+} from "@/lib/queue-store";
 import type { LiveFacilityState, Priority, LiveDesk, LiveToken } from "@/lib/types";
 
 export const Route = createFileRoute("/")({
@@ -53,13 +61,23 @@ function ControlRoomDashboard() {
 
   async function refresh(targetFacility = facilityId) {
     try {
-      const state = await fetchState({ data: { facilityId: targetFacility } });
+      let state: LiveFacilityState | null = null;
+      try {
+        state = await fetchState({ data: { facilityId: targetFacility } });
+      } catch {
+        // static fallback
+      }
+      if (!state || !state.facility) {
+        state = getFacilityState(targetFacility);
+      }
       setFacilityState(state);
       if (!quickIssueDesk && state.facility.desks.length > 0) {
         setQuickIssueDesk(state.facility.desks[0]!.id);
       }
     } catch (err) {
       console.error("Control room state fetch failed:", err);
+      const fallback = getFacilityState(targetFacility);
+      if (fallback) setFacilityState(fallback);
     }
   }
 
@@ -69,8 +87,7 @@ function ControlRoomDashboard() {
     return () => clearInterval(iv);
   }, [facilityId]);
 
-  const activeFacility =
-    LIVE_FACILITIES.find((f) => f.id === facilityId) ?? LIVE_FACILITIES[0]!;
+  const activeFacility = LIVE_FACILITIES.find((f) => f.id === facilityId) ?? LIVE_FACILITIES[0]!;
 
   // Counter management
   async function adjustCountersForDesk(desk: LiveDesk, delta: number) {
@@ -82,17 +99,25 @@ function ControlRoomDashboard() {
         // Open a closed/paused counter or add an active one
         const inactive = deskCounters.find((c) => c.status !== "open");
         if (inactive) {
-          await updateCounterFn({
-            data: { facilityId, counterId: inactive.id, status: "open" },
-          });
+          try {
+            await updateCounterFn({
+              data: { facilityId, counterId: inactive.id, status: "open" },
+            });
+          } catch {
+            updateCounter(facilityId, inactive.id, { status: "open" });
+          }
         }
       } else {
         // Close an open counter
         const active = deskCounters.find((c) => c.status === "open" && !c.currentServingTokenId);
         if (active) {
-          await updateCounterFn({
-            data: { facilityId, counterId: active.id, status: "closed" },
-          });
+          try {
+            await updateCounterFn({
+              data: { facilityId, counterId: active.id, status: "closed" },
+            });
+          } catch {
+            updateCounter(facilityId, active.id, { status: "closed" });
+          }
         }
       }
       await refresh();
@@ -105,9 +130,13 @@ function ControlRoomDashboard() {
   async function handleBumpPriority(tok: LiveToken, newPrio: Priority) {
     setBusy(true);
     try {
-      await bumpPriorityFn({
-        data: { facilityId, tokenId: tok.id, priority: newPrio },
-      });
+      try {
+        await bumpPriorityFn({
+          data: { facilityId, tokenId: tok.id, priority: newPrio },
+        });
+      } catch {
+        bumpTokenPriority(facilityId, tok.id, newPrio);
+      }
       await refresh();
     } finally {
       setBusy(false);
@@ -118,7 +147,11 @@ function ControlRoomDashboard() {
     if (!confirm(`Cancel Token ${tok.tokenNumber}?`)) return;
     setBusy(true);
     try {
-      await cancelFn({ data: { facilityId, tokenId: tok.id } });
+      try {
+        await cancelFn({ data: { facilityId, tokenId: tok.id } });
+      } catch {
+        cancelLiveToken(facilityId, tok.id);
+      }
       await refresh();
     } finally {
       setBusy(false);
@@ -129,13 +162,17 @@ function ControlRoomDashboard() {
     if (!quickIssueDesk) return;
     setBusy(true);
     try {
-      await issueFn({
-        data: {
-          facilityId,
-          pointId: quickIssueDesk,
-          priority: quickIssuePriority,
-        },
-      });
+      try {
+        await issueFn({
+          data: {
+            facilityId,
+            pointId: quickIssueDesk,
+            priority: quickIssuePriority,
+          },
+        });
+      } catch {
+        issueLiveToken(facilityId, quickIssueDesk, quickIssuePriority);
+      }
       await refresh();
     } finally {
       setBusy(false);
@@ -146,13 +183,17 @@ function ControlRoomDashboard() {
     if (!broadcastText.trim()) return;
     setBusy(true);
     try {
-      await broadcastFn({
-        data: {
-          facilityId,
-          text: broadcastText.trim(),
-          level: broadcastLevel,
-        },
-      });
+      try {
+        await broadcastFn({
+          data: {
+            facilityId,
+            text: broadcastText.trim(),
+            level: broadcastLevel,
+          },
+        });
+      } catch {
+        broadcastPublicNotice(facilityId, broadcastText.trim(), broadcastLevel);
+      }
       setBroadcastText("");
       await refresh();
     } finally {
@@ -184,7 +225,8 @@ function ControlRoomDashboard() {
       t.operatorName || "N/A",
     ]);
     const csvContent =
-      "data:text/csv;charset=utf-8," + [headers.join(","), ...rows.map((e) => e.join(","))].join("\n");
+      "data:text/csv;charset=utf-8," +
+      [headers.join(","), ...rows.map((e) => e.join(","))].join("\n");
     const link = document.createElement("a");
     link.setAttribute("href", encodeURI(csvContent));
     link.setAttribute("download", `QueueSense_${facilityId}_Shift_Audit.csv`);
@@ -301,7 +343,10 @@ function ControlRoomDashboard() {
           <div
             className="mt-1 font-mono text-3xl font-black"
             style={{
-              color: (metrics?.slaAdherencePercent ?? 100) >= 85 ? "var(--color-ok)" : "var(--color-warn)",
+              color:
+                (metrics?.slaAdherencePercent ?? 100) >= 85
+                  ? "var(--color-ok)"
+                  : "var(--color-warn)",
             }}
           >
             {metrics?.slaAdherencePercent ?? 100}%
@@ -327,7 +372,9 @@ function ControlRoomDashboard() {
             {metrics?.fairnessScore ?? 100}
             <span className="text-sm font-normal text-muted-foreground">/100</span>
           </div>
-          <span className="text-[10px] text-muted-foreground">Equity Gap: {metrics?.equityGapMinutes ?? 0}m</span>
+          <span className="text-[10px] text-muted-foreground">
+            Equity Gap: {metrics?.equityGapMinutes ?? 0}m
+          </span>
         </div>
 
         <div className="card-signal p-4">
@@ -347,7 +394,9 @@ function ControlRoomDashboard() {
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-lg font-bold text-foreground">Live Service Desks & Staff Counters</h2>
+            <h2 className="text-lg font-bold text-foreground">
+              Live Service Desks & Staff Counters
+            </h2>
             <p className="text-xs text-muted-foreground">
               Adjust open counters in real-time to match live demand and maintain SLA compliance.
             </p>
@@ -374,13 +423,11 @@ function ControlRoomDashboard() {
         {/* Desks Grid */}
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
           {activeFacility.desks.map((desk) => {
-            const deskCounters =
-              facilityState?.counters.filter((c) => c.pointId === desk.id) ?? [];
+            const deskCounters = facilityState?.counters.filter((c) => c.pointId === desk.id) ?? [];
             const openCount = deskCounters.filter((c) => c.status === "open").length;
             const waitingCount =
-              facilityState?.tokens.filter(
-                (t) => t.status === "waiting" && t.pointId === desk.id,
-              ).length ?? 0;
+              facilityState?.tokens.filter((t) => t.status === "waiting" && t.pointId === desk.id)
+                .length ?? 0;
             const isBottleneck = waitingCount > openCount * 4;
 
             return (
@@ -410,10 +457,14 @@ function ControlRoomDashboard() {
                 <div className="mt-4 grid grid-cols-2 gap-2 border-y border-border/40 py-2 text-center">
                   <div>
                     <span className="text-[10px] uppercase text-muted-foreground">Waiting</span>
-                    <div className="font-mono text-xl font-bold text-foreground">{waitingCount}</div>
+                    <div className="font-mono text-xl font-bold text-foreground">
+                      {waitingCount}
+                    </div>
                   </div>
                   <div>
-                    <span className="text-[10px] uppercase text-muted-foreground">Active Desks</span>
+                    <span className="text-[10px] uppercase text-muted-foreground">
+                      Active Desks
+                    </span>
                     <div className="font-mono text-xl font-bold text-primary">{openCount}</div>
                   </div>
                 </div>
@@ -597,7 +648,9 @@ function ControlRoomDashboard() {
           {/* Quick Dispense at Desk */}
           <div className="rounded-xl border border-border bg-surface p-5 shadow-lg">
             <h3 className="text-sm font-bold text-foreground">Issue Token at Desk</h3>
-            <p className="text-xs text-muted-foreground">Generate token on behalf of a walk-in visitor.</p>
+            <p className="text-xs text-muted-foreground">
+              Generate token on behalf of a walk-in visitor.
+            </p>
 
             <div className="mt-3 space-y-2.5">
               <select

@@ -10,7 +10,18 @@ import {
   updateCounterServer,
   transferTokenServer,
 } from "@/lib/queue.functions";
-import { LIVE_FACILITIES, playQueueChime, speakAnnouncement } from "@/lib/queue-store";
+import {
+  LIVE_FACILITIES,
+  playQueueChime,
+  speakAnnouncement,
+  getFacilityState,
+  callNextToken,
+  completeService,
+  markNoShow,
+  recallToken,
+  updateCounter,
+  transferLiveToken,
+} from "@/lib/queue-store";
 import type { LiveFacilityState, LiveCounter, LiveToken } from "@/lib/types";
 
 export const Route = createFileRoute("/counter")({
@@ -38,13 +49,23 @@ function CounterTerminal() {
   // Load state
   async function refresh(targetFacility = facilityId) {
     try {
-      const state = await fetchState({ data: { facilityId: targetFacility } });
+      let state: LiveFacilityState | null = null;
+      try {
+        state = await fetchState({ data: { facilityId: targetFacility } });
+      } catch {
+        // static fallback
+      }
+      if (!state || !state.facility) {
+        state = getFacilityState(targetFacility);
+      }
       setFacilityState(state);
       if (!selectedCounterId && state.counters.length > 0) {
         setSelectedCounterId(state.counters[0]!.id);
       }
     } catch (err) {
       console.error("Failed to load queue state:", err);
+      const fallback = getFacilityState(targetFacility);
+      if (fallback) setFacilityState(fallback);
     }
   }
 
@@ -86,9 +107,17 @@ function CounterTerminal() {
     if (!selectedCounterId) return;
     setBusy(true);
     try {
-      const token = await callNextFn({
-        data: { facilityId, counterId: selectedCounterId },
-      });
+      let token: LiveToken | null = null;
+      try {
+        token = await callNextFn({
+          data: { facilityId, counterId: selectedCounterId },
+        });
+      } catch {
+        // fallback
+      }
+      if (!token) {
+        token = callNextToken(facilityId, selectedCounterId);
+      }
       if (token) {
         playQueueChime();
         if (voiceEnabled) {
@@ -107,7 +136,11 @@ function CounterTerminal() {
     if (!selectedCounterId) return;
     setBusy(true);
     try {
-      await completeFn({ data: { facilityId, counterId: selectedCounterId } });
+      try {
+        await completeFn({ data: { facilityId, counterId: selectedCounterId } });
+      } catch {
+        completeService(facilityId, selectedCounterId);
+      }
       await refresh();
     } finally {
       setBusy(false);
@@ -118,7 +151,11 @@ function CounterTerminal() {
     if (!selectedCounterId) return;
     setBusy(true);
     try {
-      await noShowFn({ data: { facilityId, counterId: selectedCounterId } });
+      try {
+        await noShowFn({ data: { facilityId, counterId: selectedCounterId } });
+      } catch {
+        markNoShow(facilityId, selectedCounterId);
+      }
       await refresh();
     } finally {
       setBusy(false);
@@ -129,7 +166,11 @@ function CounterTerminal() {
     if (!selectedCounterId || !currentCounter?.currentServingTokenNumber) return;
     setBusy(true);
     try {
-      await recallFn({ data: { facilityId, counterId: selectedCounterId } });
+      try {
+        await recallFn({ data: { facilityId, counterId: selectedCounterId } });
+      } catch {
+        recallToken(facilityId, selectedCounterId);
+      }
       playQueueChime();
       if (voiceEnabled) {
         speakAnnouncement(
@@ -146,9 +187,13 @@ function CounterTerminal() {
     if (!selectedCounterId) return;
     setBusy(true);
     try {
-      await updateCounterFn({
-        data: { facilityId, counterId: selectedCounterId, status },
-      });
+      try {
+        await updateCounterFn({
+          data: { facilityId, counterId: selectedCounterId, status },
+        });
+      } catch {
+        updateCounter(facilityId, selectedCounterId, { status });
+      }
       await refresh();
     } finally {
       setBusy(false);
@@ -159,9 +204,13 @@ function CounterTerminal() {
     if (!selectedCounterId) return;
     setBusy(true);
     try {
-      await updateCounterFn({
-        data: { facilityId, counterId: selectedCounterId, pointId: newDeskId },
-      });
+      try {
+        await updateCounterFn({
+          data: { facilityId, counterId: selectedCounterId, pointId: newDeskId },
+        });
+      } catch {
+        updateCounter(facilityId, selectedCounterId, { pointId: newDeskId });
+      }
       await refresh();
     } finally {
       setBusy(false);
@@ -172,14 +221,22 @@ function CounterTerminal() {
     if (!currentServingToken || !transferDeskId) return;
     setBusy(true);
     try {
-      await transferFn({
-        data: {
-          facilityId,
-          tokenId: currentServingToken.id,
-          targetPointId: transferDeskId,
-        },
-      });
-      await completeFn({ data: { facilityId, counterId: selectedCounterId } });
+      try {
+        await transferFn({
+          data: {
+            facilityId,
+            tokenId: currentServingToken.id,
+            targetPointId: transferDeskId,
+          },
+        });
+      } catch {
+        transferLiveToken(facilityId, currentServingToken.id, transferDeskId);
+      }
+      try {
+        await completeFn({ data: { facilityId, counterId: selectedCounterId } });
+      } catch {
+        completeService(facilityId, selectedCounterId);
+      }
       setShowTransferModal(false);
       await refresh();
     } finally {

@@ -40,7 +40,15 @@ function PublicDisplayScreen() {
   // Poll state
   async function refresh(targetFacility = facilityId) {
     try {
-      const state = await fetchState({ data: { facilityId: targetFacility } });
+      let state: LiveFacilityState | null = null;
+      try {
+        state = await fetchState({ data: { facilityId: targetFacility } });
+      } catch {
+        // Fallback for static hosting
+      }
+      if (!state || !state.facility) {
+        state = getFacilityState(targetFacility);
+      }
       setFacilityState(state);
 
       // Check if there is a new announcement to chime & speak
@@ -56,6 +64,8 @@ function PublicDisplayScreen() {
       }
     } catch (err) {
       console.error("Display screen refresh failed:", err);
+      const fallback = getFacilityState(targetFacility);
+      if (fallback) setFacilityState(fallback);
     }
   }
 
