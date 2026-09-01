@@ -71,15 +71,18 @@ function ControlRoomDashboard() {
         state = getFacilityState(targetFacility);
       }
       setFacilityState(state);
-      if (!quickIssueDesk && state.facility.desks.length > 0) {
-        setQuickIssueDesk(state.facility.desks[0]!.id);
-      }
     } catch (err) {
       console.error("Control room state fetch failed:", err);
       const fallback = getFacilityState(targetFacility);
       if (fallback) setFacilityState(fallback);
     }
   }
+
+  useEffect(() => {
+    if (!quickIssueDesk && facilityState?.facility.desks.length) {
+      setQuickIssueDesk(facilityState.facility.desks[0]!.id);
+    }
+  }, [facilityState?.facility.desks, quickIssueDesk]);
 
   useEffect(() => {
     refresh();

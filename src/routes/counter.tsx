@@ -59,15 +59,18 @@ function CounterTerminal() {
         state = getFacilityState(targetFacility);
       }
       setFacilityState(state);
-      if (!selectedCounterId && state.counters.length > 0) {
-        setSelectedCounterId(state.counters[0]!.id);
-      }
     } catch (err) {
       console.error("Failed to load queue state:", err);
       const fallback = getFacilityState(targetFacility);
       if (fallback) setFacilityState(fallback);
     }
   }
+
+  useEffect(() => {
+    if (!selectedCounterId && facilityState?.counters.length) {
+      setSelectedCounterId(facilityState.counters[0]!.id);
+    }
+  }, [facilityState?.counters, selectedCounterId]);
 
   useEffect(() => {
     refresh();
